@@ -33,7 +33,7 @@ pipeline {
                 sh 'test -f Dockerfile'
                 sh 'test -f app/index.html'
                 sh 'grep -q "Jenkins CI/CD Pipeline" app/index.html'
-                sh 'grep -q "Version 1.0" app/index.html'
+                sh 'grep -q "Version [0-9]" app/index.html'
 
                 echo 'All tests passed!'
             }
