@@ -102,7 +102,7 @@ pipeline {
                 sh '''
                     sleep 5
 
-                    curl -f http://localhost:${HOST_PORT}
+                    curl -f http://host.docker.internal:${HOST_PORT}
 
                     echo ""
                     echo "Application verification successful!"
