@@ -22,7 +22,13 @@ pipeline {
         stage('Build') {
             steps {
                 echo 'Building application...'
-                sh 'echo Application build completed successfully'
+
+                sh '''
+                    echo "Validating application files..."
+                    test -f Dockerfile
+                    test -f app/index.html
+                    echo "Application build validation completed successfully."
+                '''
             }
         }
 
@@ -30,10 +36,12 @@ pipeline {
             steps {
                 echo 'Running automated tests...'
 
-                sh 'test -f Dockerfile'
-                sh 'test -f app/index.html'
-                sh 'grep -q "Jenkins CI/CD Pipeline" app/index.html'
-                sh 'grep -q "Version [0-9]" app/index.html'
+                sh '''
+                    test -f Dockerfile
+                    test -f app/index.html
+                    grep -q "Jenkins CI/CD Pipeline" app/index.html
+                    grep -q "Version [0-9]" app/index.html
+                '''
 
                 echo 'All tests passed!'
             }
@@ -43,18 +51,45 @@ pipeline {
             steps {
                 echo 'Packaging application...'
 
-                sh 'tar -czf ${APP_NAME}-${BUILD_NUMBER}.tar.gz app Dockerfile Jenkinsfile'
+                sh '''
+                    tar -czf ${APP_NAME}-${BUILD_NUMBER}.tar.gz \
+                        app Dockerfile Jenkinsfile
+                '''
             }
         }
 
         stage('Docker Build') {
             steps {
-                echo 'Building Docker image...'
+                echo 'Building Docker image with latest base image...'
 
-                sh 'docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .'
-                sh 'docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest'
+                sh '''
+                    docker build --pull --no-cache \
+                        -t ${IMAGE_NAME}:${IMAGE_TAG} .
+
+                    docker tag \
+                        ${IMAGE_NAME}:${IMAGE_TAG} \
+                        ${IMAGE_NAME}:latest
+                '''
             }
         }
+
+        stage('Security Scan') {
+    steps {
+        echo 'Running Trivy security scan...'
+
+        sh '''
+            docker run --rm \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                aquasec/trivy:0.74.0 \
+                image \
+                --severity HIGH,CRITICAL \
+                --exit-code 1 \
+                ${IMAGE_NAME}:${IMAGE_TAG}
+        '''
+
+        echo 'Security scan passed: no HIGH or CRITICAL vulnerabilities found.'
+    }
+}
 
         stage('Docker Push') {
             steps {
@@ -69,9 +104,14 @@ pipeline {
                 ]) {
 
                     sh '''
-                        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+                        echo "$DOCKER_PASSWORD" | \
+                            docker login \
+                            -u "$DOCKER_USERNAME" \
+                            --password-stdin
+
                         docker push ${IMAGE_NAME}:${IMAGE_TAG}
                         docker push ${IMAGE_NAME}:latest
+
                         docker logout
                     '''
                 }
@@ -80,18 +120,25 @@ pipeline {
 
         stage('Deploy') {
             steps {
-                echo 'Deploying application...'
+                echo 'Deploying hardened application container...'
 
                 sh '''
                     docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
 
                     docker run -d \
                         --name ${CONTAINER_NAME} \
+                        --restart unless-stopped \
+                        --read-only \
+                        --security-opt no-new-privileges:true \
+                        --cap-drop ALL \
+                        --tmpfs /var/cache/nginx \
+                        --tmpfs /var/run \
+                        --tmpfs /tmp \
                         -p ${HOST_PORT}:80 \
                         ${IMAGE_NAME}:${IMAGE_TAG}
                 '''
 
-                echo 'Application deployed successfully!'
+                echo 'Hardened application deployed successfully!'
             }
         }
 
@@ -112,15 +159,17 @@ pipeline {
 
         stage('Rolling Deployment') {
             steps {
-                echo 'Performing rolling deployment...'
+                echo 'Recording stable release image...'
 
                 sh '''
-                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:stable
+                    docker tag \
+                        ${IMAGE_NAME}:${IMAGE_TAG} \
+                        ${IMAGE_NAME}:stable
 
-                    echo "Current image:"
+                    echo "Stable release image:"
                     docker images ${IMAGE_NAME}
 
-                    echo "Rolling deployment completed successfully!"
+                    echo "Release image tagged successfully."
                 '''
             }
         }
@@ -130,16 +179,22 @@ pipeline {
 
         success {
             echo '========================================'
-            echo 'CI/CD PIPELINE COMPLETED SUCCESSFULLY'
+            echo 'PRODUCTION READINESS PIPELINE PASSED'
             echo '========================================'
         }
 
         failure {
             echo '========================================'
-            echo 'CI/CD PIPELINE FAILED'
+            echo 'PIPELINE FAILED'
             echo 'Check the console output.'
             echo '========================================'
         }
+
+        always {
+            echo 'Production readiness pipeline execution completed.'
+        }
     }
 }
+
+
 
